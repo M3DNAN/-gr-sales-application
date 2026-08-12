@@ -201,6 +201,16 @@
   .status-msg.success{ background: rgba(167,21,128,0.08); border:1px solid var(--amber); color:var(--amber-deep); }
   .status-msg.error{ background: rgba(179,52,31,0.08); border:1px solid var(--error); color:var(--error); }
 
+  .field-error{
+    display:none; margin-top:6px; font-size:12.5px; color:var(--error);
+  }
+  .field.invalid .field-error{ display:block; }
+  .field.invalid input{ border-color:var(--error); }
+
+  .hp-field{
+    position:absolute; left:-9999px; top:-9999px; width:1px; height:1px; overflow:hidden;
+  }
+
   ::selection{ background: var(--amber-glow); }
 
   @media (prefers-reduced-motion: reduce){
@@ -236,6 +246,11 @@
     <p class="subtitle" data-i18n="subtitle">Thanks for your interest in joining the Graffiti Resin team. Fill in the details below and our team will get in touch.</p>
 
     <form id="app-form">
+      <!-- Honeypot — invisible to real users, bots often auto-fill every field -->
+      <div class="hp-field" aria-hidden="true">
+        <label for="hp-website" tabindex="-1">Leave this field empty</label>
+        <input type="text" id="hp-website" name="website" tabindex="-1" autocomplete="off">
+      </div>
 
       <!-- Section 1 -->
       <section class="q-section" data-section="0">
@@ -259,7 +274,8 @@
         </div>
         <div class="field">
           <label class="field-label" data-i18n="q5_label">Mobile number (WhatsApp)<span class="req">*</span></label>
-          <input type="tel" name="q5" required>
+          <input type="tel" name="q5" id="q5-input" inputmode="numeric" maxlength="10" pattern="[0-9]{10}" placeholder="05XXXXXXXX" required>
+          <div class="field-error" id="q5-error" data-i18n="phone_error">Enter a valid 10-digit mobile number</div>
         </div>
         <div class="field">
           <label class="field-label" data-i18n="q6_label">Email<span class="req">*</span></label>
@@ -451,7 +467,8 @@ const dict = {
   status_success: {en:"Thanks — your application has been submitted successfully.", ar:"تم إرسال طلبك بنجاح — شكرًا لكِ."},
   status_error: {en:"Something went wrong sending your application. Please try again or contact us directly.", ar:"في مشكلة بإرسال الطلب. حاولي مرة ثانية أو تواصلي معنا مباشرة."},
   status_sending: {en:"Sending…", ar:"جاري الإرسال…"},
-  file_too_big: {en:"File is larger than 8MB — please upload a smaller file.", ar:"حجم الملف أكبر من 8 ميجا — من فضلك ارفعي ملف أصغر."}
+  file_too_big: {en:"File is larger than 8MB — please upload a smaller file.", ar:"حجم الملف أكبر من 8 ميجا — من فضلك ارفعي ملف أصغر."},
+  phone_error: {en:"Enter a valid 10-digit mobile number", ar:"أدخلي رقم موبايل مكوّن من 10 أرقام"}
 };
 
 function setLang(lang){
@@ -511,6 +528,25 @@ cvInput.addEventListener('change', ()=>{
   fileNameDisplay.textContent = f.name;
 });
 
+/* ======================================================
+   4b. Phone validation — digits only, exactly 10
+   ====================================================== */
+const q5Input = document.getElementById('q5-input');
+q5Input.addEventListener('input', ()=>{
+  q5Input.value = q5Input.value.replace(/\D/g,'').slice(0,10);
+  q5Input.closest('.field').classList.remove('invalid');
+});
+function isPhoneValid(){
+  return /^[0-9]{10}$/.test(q5Input.value);
+}
+
+/* ======================================================
+   4c. Spam protection — honeypot + minimum time-on-page
+   ====================================================== */
+const pageLoadTime = Date.now();
+const MIN_FILL_TIME_MS = 3000; // real applicants need at least ~3s to read + fill
+const honeypot = document.getElementById('hp-website');
+
 function fileToBase64(file){
   return new Promise((resolve, reject)=>{
     const reader = new FileReader();
@@ -530,9 +566,36 @@ const submitBtn = document.getElementById('submit-btn');
 form.addEventListener('submit', async (e)=>{
   e.preventDefault();
   const lang = window.__currentLang;
+
+  // --- Phone validation ---
+  if(!isPhoneValid()){
+    q5Input.closest('.field').classList.add('invalid');
+    q5Input.focus();
+    return;
+  }
+
+  // --- Spam checks: honeypot + minimum time-on-page ---
+  const filledTooFast = (Date.now() - pageLoadTime) < MIN_FILL_TIME_MS;
+  const honeypotTriggered = honeypot.value.trim().length > 0;
+  const looksLikeSpam = filledTooFast || honeypotTriggered;
+
   statusMsg.className = 'status-msg show';
   statusMsg.textContent = dict.status_sending[lang];
   submitBtn.disabled = true;
+
+  if(looksLikeSpam){
+    // Silently drop the submission but show success so bots don't adapt.
+    setTimeout(()=>{
+      statusMsg.className = 'status-msg show success';
+      statusMsg.textContent = dict.status_success[lang];
+      form.reset();
+      fileNameDisplay.textContent = '';
+      segments.forEach(seg=>seg.classList.remove('filled','active'));
+      gaugePct.textContent = '0%';
+      submitBtn.disabled = false;
+    }, 500);
+    return;
+  }
 
   try{
     const fd = new FormData(form);
